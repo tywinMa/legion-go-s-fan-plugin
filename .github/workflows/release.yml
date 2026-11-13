@@ -1,0 +1,124 @@
+name: Release Decky plugin
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: decky-release
+  queue: max
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      kernel: ${{ steps.driver.outputs.kernel }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: '22'
+      - name: Set plugin version
+        id: version
+        run: |
+          # v0.2.5 was the last manual release. Reruns keep the same version.
+          version="0.2.$((5 + GITHUB_RUN_NUMBER))"
+          npm version "$version" --no-git-tag-version --ignore-scripts
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Build Decky frontend
+        run: |
+          npm install --global pnpm@10.18.3
+          pnpm install --frozen-lockfile
+          pnpm check
+          pnpm build
+          python3 -m py_compile main.py
+      - name: Build SteamOS fan driver
+        id: driver
+        env:
+          KERNEL: 7.2.7-valve2-2-neptune-72-g31504582a073
+          HEADERS_URL: https://steamdeck-packages.steamos.cloud/archlinux-mirror/jupiter-3.9/os/x86_64/linux-neptune-72-headers-7.2.7.valve2-2-x86_64.pkg.tar.zst
+          HEADERS_SHA256: 57f3eea26d2ae0eb693d20a6759ab34dfcfd604d60f93f7c010804ba73f0859d
+        run: |
+          build_dir=$(mktemp -d)
+          curl --fail --silent --show-error --location --retry 3 "$HEADERS_URL" -o "$build_dir/headers.pkg.tar.zst"
+          echo "$HEADERS_SHA256  $build_dir/headers.pkg.tar.zst" | sha256sum --check
+          docker run --rm --env KERNEL \
+            --volume "$build_dir:/build" \
+            --volume "$PWD/driver:/source:ro" \
+            archlinux:base-devel@sha256:fa2d4ce3310ddd90a4208e5168be8ad367da5129af1245f38fd2d803bcbe3239 \
+            bash -euc '
+              pacman -Sy --noconfirm pahole
+              tar -xf /build/headers.pkg.tar.zst -C /build
+              mkdir /build/driver
+              cp /source/{Makefile,legion_go_s_fan.c} /build/driver/
+              make -C "/build/usr/lib/modules/$KERNEL/build" M=/build/driver modules
+              strip --strip-debug /build/driver/legion_go_s_fan.ko
+              vermagic=$(modinfo -F vermagic /build/driver/legion_go_s_fan.ko)
+              [[ ${vermagic%% *} == "$KERNEL" ]]
+            '
+          cp "$build_dir/driver/legion_go_s_fan.ko" .
+          echo "kernel=$KERNEL" >> "$GITHUB_OUTPUT"
+      - name: Package Decky-installable ZIP
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          stage=$(mktemp -d)
+          plugin="$stage/legion-go-s-fan"
+          mkdir -p "$plugin/dist" release
+          install -m 0644 plugin.json package.json main.py legion_go_s_fan.ko LICENSE LICENSE.driver "$plugin/"
+          install -m 0644 dist/index.js "$plugin/dist/"
+          (cd "$stage" && zip -qr "$GITHUB_WORKSPACE/release/legion-go-s-fan-$VERSION.zip" legion-go-s-fan)
+          unzip -tq "release/legion-go-s-fan-$VERSION.zip"
+          (cd release && sha256sum "legion-go-s-fan-$VERSION.zip" > "legion-go-s-fan-$VERSION.zip.sha256")
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: decky-plugin
+          path: release/
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: true
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: decky-plugin
+      - name: Publish ZIP to GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+          KERNEL: ${{ needs.build.outputs.kernel }}
+        run: |
+          tag="v$VERSION"
+          zip="legion-go-s-fan-$VERSION.zip"
+          sha256sum --check "$zip.sha256"
+
+          # A rerun must not replace an already published download.
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $tag already exists."
+            exit 0
+          fi
+
+          cat > notes.md <<EOF
+          适用于 Legion Go S（83Q2）、BIOS QCCN26WW 和 SteamOS 内核 \`$KERNEL\`。
+
+          在 Decky Loader 的「设置 → 开发者」里选择从 ZIP 安装，直接选中 \`$zip\`。也可以复制下方 ZIP 的链接，通过 URL 安装。
+
+          安装后打开 Legion Go S Fan，编辑曲线并选择「保存并应用」。
+
+          [使用说明](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_SHA/README.md)
+          EOF
+          gh release create "$tag" "$zip" "$zip.sha256" --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" --title "Legion Go S Fan $tag" --notes-file notes.md
