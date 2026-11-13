@@ -1,0 +1,15 @@
+.DS_Store
+/node_modules
+/dist/
+__pycache__/
+*.py[cod]
+
+# Kernel build output
+*.ko
+*.o
+*.mod
+*.mod.c
+.*.cmd
+Module.symvers
+modules.order
+.tmp_versions/
