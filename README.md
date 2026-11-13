@@ -4,9 +4,19 @@
 
 0% 时风扇停转。非零目标转速范围为 1,800–4,200 RPM，100% 对应 4,200 RPM。温度点之间采用线性插值，超出节点范围时沿用最近端点的百分比。驱动在停止接收目标 6 秒后尝试解除接管。当前驱动只支持 Legion Go S 83Q2、BIOS QCCN26WW，v0.2.5 安装包中的模块针对 SteamOS 内核 7.2.7-valve2-2-neptune-72-g31504582a073 编译。
 
-## 更新已有的 0.1.1 安装
+## 安装或更新
 
-使用 v0.2.5 安装包，或先按下文构建源码，再在掌机上执行 `sudo bash upgrade.sh`。可加 `--verify` 在设备空闲时验证实际转速响应和恢复自动。测试使用临时配置，保留已有温度节点。更新过程会重新启动 Decky。
+先在掌机上安装并启动 Decky Loader。从 [GitHub Releases](https://github.com/tywinMa/legion-go-s-fan-plugin/releases/latest) 下载 `legion-go-s-fan-0.2.5.zip`，解压，在解压后的 `legion-go-s-fan` 目录中打开 Konsole，执行：
+
+```sh
+sudo bash install-on-steamos.sh
+```
+
+安装脚本会检查机型、BIOS 和内核版本，并重启 Decky Loader。首次安装后，在游戏模式打开 Decky → Legion Go S Fan，选择「保存并应用」后才会启用自定义曲线。已有安装会走更新流程并保留设置。
+
+这个 ZIP 包含需要由 SteamOS 加载的内核模块，请按上述步骤运行安装脚本。
+
+实测设备曾在 v0.2.5 安装后出现一次内置手柄失灵，重启 InputPlumber 后恢复。与风扇驱动的关系尚未确认。
 
 ## 构建
 
